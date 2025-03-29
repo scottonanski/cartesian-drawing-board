@@ -1,0 +1,52 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover">
+    <title>Canvas Framework - Layers & Pan/Zoom</title>
+    <link rel="stylesheet" href="./src/style.css">
+</head>
+<body>
+    <script type="module">
+        import { CanvasFrameworkBuilder } from './src/canvasFrameworkBuilder.js';
+        import { LayerManager } from './src/LayerManager.js'; // Updated import
+        import { Rectangle } from './src/elements/Rectangle.js';
+        import { ImageElement } from './src/elements/ImageElement.js';
+
+        document.addEventListener('DOMContentLoaded', () => {
+            try {
+                const app = new CanvasFrameworkBuilder();
+
+                // Raster Layer (bottom)
+                const rasterLayer = new LayerManager('raster1', 'Background Image Layer', 'raster');
+                rasterLayer.addElement(new ImageElement(50, 350, './src/assets/sample.png'));
+                app.addLayer(rasterLayer);
+
+                // Vector Layer 1
+                const vectorLayer1 = new LayerManager('vector1', 'Vector Layer 1', 'vector');
+                vectorLayer1.opacity = 0.8;
+                vectorLayer1.addElement(new Rectangle(100, 100, 200, 150, '#3b82f6'));
+                vectorLayer1.addElement(new Rectangle(150, 200, 100, 100, '#10b981'));
+                app.addLayer(vectorLayer1);
+
+                // Vector Layer 2 (top)
+                const vectorLayer2 = new LayerManager('vector2', 'Top Vector Layer', 'vector');
+                vectorLayer2.addElement(new Rectangle(50, 50, 80, 80, '#ef4444'));
+                app.addLayer(vectorLayer2);
+
+                window.canvasApp = app;
+
+            } catch (error) {
+                console.error("Canvas Framework Initialization Failed:", error);
+                document.body.innerHTML = `
+                    <div class="error-message">
+                        <h1>Application Error</h1>
+                        <p>Failed to initialize the canvas application:</p>
+                        <p><strong>${error.message}</strong></p>
+                        <p><small>Please check the console for more details.</small></p>
+                    </div>`;
+            }
+        });
+    </script>
+</body>
+</html>
