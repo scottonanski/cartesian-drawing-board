@@ -1,0 +1,15 @@
+body { margin: 0; overflow: hidden; }
+canvas { display: block; }
+.edit-overlay {
+    position: absolute;
+    border: 1px dashed #333;
+    margin: 0;
+    resize: none;
+    overflow: auto;
+    white-space: pre-wrap;
+    word-wrap: break-word;
+    box-sizing: border-box;
+    z-index: 10;
+    background-color: rgba(255, 255, 255, 0.95);
+    outline: none;
+}
