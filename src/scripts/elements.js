@@ -78,7 +78,7 @@ export function createImageElement(renderer, id, x, y, src, options = {}) {
         // Provide default dimensions if none were set, so placeholder can draw
         if (element.width === null) element.width = 50;
         if (element.height === null) element.height = 50;
-        console.error(`Failed to load image: ${src} (ID: ${id})`);
+        console.error(`Failed to load image: ${src} (ID: ${id}). Error handler triggered, placeholder with 'Error' text will be displayed. This is deliberate for testing purposes. It's demonstrating the error handling mechanism.`);
         renderer.markDirty(element); // Mark dirty to draw error placeholder
     };
 

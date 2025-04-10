@@ -1,6 +1,7 @@
 // drawing.js
-import * as Constants from './constants.js';
-import { toScreenCoords } from './utils/coordinates.js';
+// Corrected path for constants.js (now inside utils)
+import * as Constants from './utils/constants.js';
+import { toScreenCoords, toCartesianCoords } from './utils/coordinates.js';
 import { updateTextMetrics } from './utils/textUtils.js';
 import { getResizeHandles } from './utils/interactionUtils.js';
 
@@ -114,7 +115,7 @@ export function drawImageElement(renderer, el) {
 
 
     if (!el.loaded || el.error) {
-        drawPlaceholder(renderer, el, el.error ? "Error" : "Loading...");
+        drawPlaceholder(renderer, el, el.error ? " See Console..." : "Loading...");
         return; // Don't draw image or selection if not loaded/error
     }
 
@@ -196,7 +197,6 @@ export function drawSelectionHandles(renderer, el, screenX, screenY) {
     ctx.restore();
 }
 
-
 /** Draws the Cartesian axes */
 export function drawAxes(renderer) {
     const ctx = renderer.ctx;
@@ -239,4 +239,130 @@ export function drawAxes(renderer) {
     ctx.fill();
 
     ctx.restore();
+}
+
+// Draws temporary points, handles, and curve preview during creation
+/** Draws temporary points, handles, and curve preview during creation */
+export function drawBezierPreview(renderer) {
+    const ctx = renderer.ctx;
+    const state = renderer.bezierDrawingState; // 'idle', 'definingP1', 'p1Defined', 'definingP2'
+    const points = renderer.currentCurvePoints; // {p0, p1, p3}
+    const style = renderer.bezierPreviewStyle;
+
+    if (state === 'idle' || !points.p0) return; // Nothing to draw
+
+    ctx.save();
+
+    // --- Draw P0 ---
+    const p0_screen = renderer.toScreenCoords(points.p0.x, points.p0.y);
+    ctx.fillStyle = style.pointColor;
+    ctx.beginPath(); ctx.arc(p0_screen.x, p0_screen.y, style.pointRadius, 0, Math.PI * 2); ctx.fill();
+    ctx.fillStyle = "black"; ctx.font = "10px sans-serif"; ctx.textAlign = "center";
+    ctx.fillText("P0", p0_screen.x, p0_screen.y - style.pointRadius - 2);
+
+    let p1_screen = null;
+    let p3_screen = null;
+    let p2_screen_preview = null; // This will be the *reflected* point for preview
+
+    // --- Draw P1 Handle (Dot and Line P0-P1) ---
+    // Draw if P1 exists (relevant in definingP1, p1Defined, definingP2 states)
+    if (points.p1 && (state === 'definingP1' || state === 'p1Defined' || state === 'definingP2')) {
+        p1_screen = renderer.toScreenCoords(points.p1.x, points.p1.y);
+        // Draw P1 Dot
+        ctx.fillStyle = style.pointColor;
+        ctx.beginPath(); ctx.arc(p1_screen.x, p1_screen.y, style.pointRadius, 0, Math.PI * 2); ctx.fill();
+        ctx.fillText("P1", p1_screen.x, p1_screen.y - style.pointRadius - 2);
+        // Draw P0-P1 Line
+        ctx.strokeStyle = style.lineColor; ctx.lineWidth = style.lineWidth;
+        ctx.beginPath(); ctx.moveTo(p0_screen.x, p0_screen.y); ctx.lineTo(p1_screen.x, p1_screen.y); ctx.stroke();
+    }
+
+    // --- Draw P3 Point and Reflected P2 Handle/Line/Curve Preview ---
+    // Only draw these parts when actively defining P2
+    if (state === 'definingP2') {
+        // Draw P3 Dot (if P3 exists)
+        if (points.p3) {
+            p3_screen = renderer.toScreenCoords(points.p3.x, points.p3.y);
+            ctx.fillStyle = style.pointColor;
+            ctx.beginPath(); ctx.arc(p3_screen.x, p3_screen.y, style.pointRadius, 0, Math.PI * 2); ctx.fill();
+            ctx.fillText("P3", p3_screen.x, p3_screen.y - style.pointRadius - 2);
+        }
+
+        // Draw P2 Handle Dot and Line P3-P2 (using live mouse pos to calculate *reflected* P2)
+        if (points.p3 && renderer.currentMousePosCartesian) {
+             p3_screen = p3_screen || renderer.toScreenCoords(points.p3.x, points.p3.y);
+             const mousePosCartesian = renderer.currentMousePosCartesian;
+
+             // Calculate the REFLECTED P2 position based on current mouse drag
+             const reflectedP2_cartesian = {
+                 x: points.p3.x + (points.p3.x - mousePosCartesian.x),
+                 y: points.p3.y + (points.p3.y - mousePosCartesian.y)
+             };
+             p2_screen_preview = renderer.toScreenCoords(reflectedP2_cartesian.x, reflectedP2_cartesian.y);
+
+            // Draw P2 Dot (at the calculated reflected position)
+            ctx.fillStyle = style.pointColor;
+            ctx.beginPath(); ctx.arc(p2_screen_preview.x, p2_screen_preview.y, style.pointRadius, 0, Math.PI * 2); ctx.fill();
+            ctx.fillText("P2", p2_screen_preview.x, p2_screen_preview.y - style.pointRadius - 2);
+
+            // Draw Line from P3 to the calculated P2 preview position
+            ctx.strokeStyle = style.lineColor; ctx.lineWidth = style.lineWidth;
+            ctx.beginPath(); ctx.moveTo(p3_screen.x, p3_screen.y); ctx.lineTo(p2_screen_preview.x, p2_screen_preview.y); ctx.stroke();
+
+            // Optional: Draw the handle/dot the user is actually dragging (maybe dashed line to it?)
+            const mousePosScreen = renderer.toScreenCoords(mousePosCartesian.x, mousePosCartesian.y);
+            ctx.fillStyle = 'rgba(200, 200, 200, 0.6)'; // Lighter color for actual drag handle
+            ctx.beginPath(); ctx.arc(mousePosScreen.x, mousePosScreen.y, style.pointRadius - 1, 0, Math.PI * 2); ctx.fill();
+            // Draw dashed line from P3 to actual mouse drag position
+            ctx.save(); // Save before setting dash
+            ctx.setLineDash([2, 3]);
+            ctx.strokeStyle = 'rgba(150, 150, 150, 0.6)';
+            ctx.beginPath(); ctx.moveTo(p3_screen.x, p3_screen.y); ctx.lineTo(mousePosScreen.x, mousePosScreen.y); ctx.stroke();
+            ctx.restore(); // Restore (removes dash setting)
+
+        }
+
+        // --- Draw Live Curve Preview ---
+        // Draw using P0, P1, P3 and the calculated REFLECTED P2 for preview
+        if (p0_screen && p1_screen && p3_screen && p2_screen_preview) {
+            ctx.strokeStyle = renderer.bezierCurveStyle.color;
+            ctx.lineWidth = renderer.bezierCurveStyle.lineWidth;
+            // Optional: Dashed line for preview
+            // ctx.setLineDash([4, 4]);
+            ctx.beginPath();
+            ctx.moveTo(p0_screen.x, p0_screen.y);
+            ctx.bezierCurveTo(p1_screen.x, p1_screen.y, p2_screen_preview.x, p2_screen_preview.y, p3_screen.x, p3_screen.y);
+            ctx.stroke();
+            // ctx.setLineDash([]); // Reset dash
+        }
+    }
+
+    ctx.restore();
+}
+
+// Draws a finished Bezier curve element
+export function drawBezierElement(renderer, el) {
+    const ctx = renderer.ctx;
+
+    // Make sure we have the right element type and the points array
+    if (el.type !== 'bezier' || !Array.isArray(el.points) || el.points.length !== 4) {
+        console.warn(`Attempted to draw invalid bezier element: ID ${el.id}`);
+        return;
+    }
+
+    // Convert the stored Cartesian points [P0, P1, P2, P3] to screen coordinates
+    const screenPoints = el.points.map(pt => renderer.toScreenCoords(pt.x, pt.y));
+    const p0 = screenPoints[0]; // Start Point
+    const p1 = screenPoints[1]; // Control Point 1
+    const p2 = screenPoints[2]; // Control Point 2
+    const p3 = screenPoints[3]; // End Point
+
+    ctx.save(); // Save current styles
+    ctx.strokeStyle = el.color || 'black';     // Use element's color or default to black
+    ctx.lineWidth = el.lineWidth || 1;         // Use element's line width or default to 2
+    ctx.beginPath();                           // Start a new path
+    ctx.moveTo(p0.x, p0.y);                    // Move to the starting point (P0)
+    ctx.bezierCurveTo(p1.x, p1.y, p2.x, p2.y, p3.x, p3.y); // Draw the curve using P1, P2, P3
+    ctx.stroke();                              // Render the path outline
+    ctx.restore(); // Restore previous styles
 }

@@ -4,30 +4,44 @@
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>Modular Cartesian Renderer</title>
+    <!-- Link to your CSS file -->
+    <link rel="stylesheet" href="src/styles/style.css">
     <style>
+        /* Keep existing styles */
         body { margin: 0; overflow: hidden; }
-        canvas { display: block; background-color: #f8f8f8; }
-        /* Style for the text editing overlay */
-        .edit-overlay {
-            position: absolute; /* Set by JS */
-            z-index: 1000;
-            border: 1px solid #333; /* Default border, JS might override */
-            background-color: white; /* Ensure it's visible */
-            box-sizing: border-box; /* Set by JS */
-            font-family: sans-serif; /* Default font, JS overrides */
-            font-size: 16px; /* Default size, JS overrides */
-            padding: 2px; /* Default padding, JS overrides */
-            margin: 0;
-            resize: none; /* Disable manual resize */
-            overflow: hidden; /* Hide scrollbars */
-            white-space: pre-wrap; /* Allow wrapping like canvas text */
-            outline: none; /* Remove default focus outline */
+        canvas { display: block; background-color: #f8f8f8; cursor: default; }
+        .edit-overlay { /* ... existing styles ... */ }
+
+        /* Add styles for tool buttons */
+        .toolbar {
+            position: absolute;
+            top: 10px;
+            left: 10px;
+            background: rgba(255, 255, 255, 0.8);
+            padding: 5px;
+            border-radius: 4px;
+            z-index: 10; /* Ensure toolbar is above canvas */
+        }
+        .toolbar button {
+            margin-right: 5px;
+            padding: 5px 10px;
+            cursor: pointer;
+        }
+        .toolbar button.active {
+            background-color: #aaf;
+            font-weight: bold;
         }
     </style>
 </head>
 <body>
+    <!-- Add Toolbar -->
+    <div class="toolbar">
+        <button id="selectToolBtn" class="active">Select</button>
+        <button id="bezierToolBtn">Bezier Curve</button>
+    </div>
+
     <canvas id="myCartesianCanvas"></canvas>
     <!-- Load the main entry point as a module -->
-    <script type="module" src="main.js"></script>
+    <script type="module" src="src/scripts/main.js"></script> <!-- Adjusted path -->
 </body>
 </html>

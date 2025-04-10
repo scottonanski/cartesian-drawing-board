@@ -1,7 +1,8 @@
 // utils/interactionUtils.js
-import * as Constants from '../utils/constants.js';
+
+import * as Constants from './constants.js';
 import { toScreenCoords, toCartesianCoords } from './coordinates.js';
-import { updateTextMetrics } from './textUtils.js'; // Needed for text hit testing/bounds
+import { updateTextMetrics } from './textUtils.js';
 
 /**
  * Checks if a point (Cartesian) is within the bounds of a rect or image element.

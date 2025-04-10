@@ -4,223 +4,275 @@ import { toCartesianCoords } from './utils/coordinates.js';
 import { markDirty, markEntireCanvasDirty } from './dirtyRegions.js';
 import { startEditing, stopEditing, updateEditOverlay } from './editing.js';
 
-// Factory functions to create event handlers that close over the renderer instance
-
-export function createMouseDownHandler(renderer) {
-    return function handleMouseDown(event) {
-        const overlay = document.querySelector('.edit-overlay');
-        const isClickOnOverlay = overlay && event.target === overlay;
-        const isClickOnCanvas = event.target === renderer.canvas;
-
-        // If editing and click is *outside* the overlay, stop editing
-        if (renderer.editingElement && !isClickOnOverlay) {
-            // Use a minimal timeout to allow double-click detection or other interactions
-             setTimeout(() => {
-                 // Re-check if still editing and focus hasn't returned to overlay
-                 if (renderer.editingElement && document.activeElement !== overlay) {
-                     stopEditing(renderer);
-                 }
-             }, 50);
-             // Don't process canvas interaction if click was outside editing overlay
-             if (!isClickOnCanvas) return;
-        }
-
-
-        const rect = renderer.canvas.getBoundingClientRect();
-        const screenX = event.clientX - rect.left;
-        const screenY = event.clientY - rect.top;
-
-        // If editing text, don't allow selecting/dragging other elements
-        if (renderer.editingElement) {
-            // Allow clicking off to stop editing (handled above)
-             if (!isClickOnOverlay) {
-                 // Potentially deselect if click was on empty canvas space
-                 // This logic might be redundant with the stopEditing check above
-             }
-            return; // Prevent further interaction while editing overlay is active
-        }
-
-        // --- Interaction with Canvas Elements ---
-        const hitInfo = getElementAtScreenCoords(renderer, screenX, screenY);
-
-        // Case 1: Clicked on a resize handle
-        if (hitInfo && hitInfo.handleType) {
-            const element = hitInfo.element;
-            if (element.type === 'image') { // Only images are resizable
-                renderer.resizing = true;
-                renderer.resizeHandleType = hitInfo.handleType;
-                renderer.selectedElement = element; // Ensure element is selected
-                renderer.originalDimensions = { x: element.x, y: element.y, width: element.width, height: element.height };
-                renderer.startMousePos = { x: screenX, y: screenY };
-                renderer.dragging = false; // Not dragging the element itself
-                renderer.canvas.style.cursor = getResizeCursor(hitInfo.handleType);
-                console.log(`Started resizing element ${element.id} via ${hitInfo.handleType} handle`);
-                markDirty(renderer, element); // Mark for redraw (selection handles)
-            }
-        }
-        // Case 2: Clicked on an element (not a handle)
-        else if (hitInfo && typeof hitInfo.handleType === 'undefined') {
-            const element = hitInfo;
-            // Select the element if it's not already selected
-            if (renderer.selectedElement !== element) {
-                if (renderer.selectedElement) markDirty(renderer, renderer.selectedElement); // Mark old selection dirty
-                renderer.selectedElement = element;
-                markDirty(renderer, renderer.selectedElement); // Mark new selection dirty
-                console.log(`Selected ${element.type} ID ${element.id}`);
-            } else {
-                 console.log(`Clicked already selected ${element.type} ID ${element.id}`);
-            }
-
-            // Start dragging the selected element
-            renderer.dragging = true;
-            const cartesianClick = toCartesianCoords(screenX, screenY, renderer.originX, renderer.originY);
-            // Calculate offset from element's *center*
-            renderer.dragOffsetX = cartesianClick.x - element.x;
-            renderer.dragOffsetY = cartesianClick.y - element.y;
-            renderer.canvas.style.cursor = 'grabbing';
-            renderer.resizing = false; // Ensure not resizing
-        }
-        // Case 3: Clicked on empty space
-        else {
-            console.log("Clicked empty space - deselecting");
-            if (renderer.selectedElement) {
-                markDirty(renderer, renderer.selectedElement); // Mark old selection dirty for redraw
-                renderer.selectedElement = null;
-                markEntireCanvasDirty(renderer); // Redraw needed to remove selection viz
-            }
-            renderer.dragging = false;
-            renderer.resizing = false;
-            renderer.canvas.style.cursor = 'default';
-        }
-    };
-}
-
+// Functions to create event handlers that close over the renderer instance
 export function createMouseMoveHandler(renderer) {
+    // This function returns the actual event listener
     return function handleMouseMove(event) {
+        // Get mouse position relative to the canvas
         const rect = renderer.canvas.getBoundingClientRect();
         const screenX = event.clientX - rect.left;
         const screenY = event.clientY - rect.top;
+        // Convert screen coordinates to Cartesian coordinates
+        const cartesianPoint = renderer.toCartesianCoords(screenX, screenY);
 
-        // --- Handle Resizing ---
-        if (renderer.resizing && renderer.selectedElement) {
-            markDirty(renderer, renderer.selectedElement); // Mark old position/size dirty
+        // Store the latest Cartesian mouse position in the renderer
+        // This is needed for the live preview of the reflected P2
+        renderer.currentMousePosCartesian = cartesianPoint;
 
-            // Calculate new dimensions based on mouse movement
-            const newDims = calculateNewDimensions(
-                renderer, // Pass renderer instance
-                renderer.resizeHandleType,
-                screenX, screenY,
-                renderer.startMousePos,
-                renderer.originalDimensions,
-                event.shiftKey // Maintain aspect ratio if Shift is pressed
-            );
+        // --- Handle Pen Tool Dragging ---
+        if (renderer.currentTool === 'pen') {
+            // Check the current drawing phase
+            if (renderer.bezierDrawingState === 'definingP1') {
+                // --- Phase 1 Drag: Update P1 position ---
+                // Update the first control point to follow the mouse
+                renderer.currentCurvePoints.p1 = cartesianPoint;
+                // Mark canvas dirty to update the preview (P0, P1 dot, P0-P1 line)
+                renderer.markEntireCanvasDirty();
+            } else if (renderer.bezierDrawingState === 'definingP2') {
+                // --- Phase 2 Drag: Update P2 preview ---
+                // We don't store P2 directly during move, the preview function
+                // will calculate the reflected point based on the live mouse position.
+                // Just mark dirty to trigger the preview redraw.
+                renderer.markEntireCanvasDirty();
+            }
+            // If state is 'idle' or 'p1Defined', mouse move does nothing for pen tool
 
-            // Update element properties
-            renderer.selectedElement.x = newDims.x;
-            renderer.selectedElement.y = newDims.y;
-            renderer.selectedElement.width = newDims.width;
-            renderer.selectedElement.height = newDims.height;
-
-            markDirty(renderer, renderer.selectedElement); // Mark new position/size dirty
-            renderer.canvas.style.cursor = getResizeCursor(renderer.resizeHandleType); // Keep resize cursor
+            // Stop further processing to prevent select tool hover effects
+            return;
         }
-        // --- Handle Dragging ---
+
+        // --- Handle Select/Edit Tool Dragging/Resizing/Hover ---
+        // This part only runs if currentTool is NOT 'pen'
+
+        // Handle Resizing (if active)
+        if (renderer.resizing && renderer.selectedElement) {
+             // Add your resizing calculation logic here
+             markDirty(renderer, renderer.selectedElement); // Mark old pos/size
+             // Update element properties
+             // markDirty(renderer, renderer.selectedElement); // Mark new pos/size
+            renderer.canvas.style.cursor = getResizeCursor(renderer.resizeHandleType);
+        }
+        // Handle Dragging (if active)
         else if (renderer.dragging && renderer.selectedElement) {
-            markDirty(renderer, renderer.selectedElement); // Mark old position dirty
-
-            const cartesianMouse = toCartesianCoords(screenX, screenY, renderer.originX, renderer.originY);
-            // Update element center position based on drag offset
-            renderer.selectedElement.x = cartesianMouse.x - renderer.dragOffsetX;
-            renderer.selectedElement.y = cartesianMouse.y - renderer.dragOffsetY;
-
-            markDirty(renderer, renderer.selectedElement); // Mark new position dirty
-            renderer.canvas.style.cursor = 'grabbing'; // Keep grabbing cursor
-
-             // If editing overlay is somehow active during drag (shouldn't happen often), update its position
+             markDirty(renderer, renderer.selectedElement); // Mark old pos
+             // Update element position based on drag offset
+             const cartesianMouse = toCartesianCoords(screenX, screenY, renderer.originX, renderer.originY);
+             renderer.selectedElement.x = cartesianMouse.x - renderer.dragOffsetX;
+             renderer.selectedElement.y = cartesianMouse.y - renderer.dragOffsetY;
+             markDirty(renderer, renderer.selectedElement); // Mark new pos
+             // Only set grabbing cursor if select tool is active
+            if (renderer.currentTool === 'select') {
+                renderer.canvas.style.cursor = 'grabbing';
+            }
+             // Update edit overlay if dragging the element being edited
              if (renderer.editingElement === renderer.selectedElement) {
-                 updateEditOverlay(renderer);
+                  updateEditOverlay(renderer);
              }
         }
-        // --- Handle Hover Effects (Cursor Changes) ---
-        else if (!renderer.editingElement) { // Only change cursor if not editing text
-            const hitInfo = getElementAtScreenCoords(renderer, screenX, screenY);
-
-            if (hitInfo && hitInfo.handleType) {
-                renderer.canvas.style.cursor = getResizeCursor(hitInfo.handleType);
-            } else if (hitInfo) {
-                renderer.canvas.style.cursor = 'move'; // Hovering over a movable element
-            } else {
-                renderer.canvas.style.cursor = 'default'; // Hovering over empty space
+        // Handle Hover Effects (if not dragging/resizing/editing)
+        else if (!renderer.editingElement) {
+            // Only do hover cursor changes if the select tool is active
+            if (renderer.currentTool === 'select') {
+                // Check what's under the mouse
+                const hitInfo = getElementAtScreenCoords(renderer, screenX, screenY);
+                // Set cursor based on whether it's a handle, an element, or empty space
+                if (hitInfo && hitInfo.handleType) {
+                    renderer.canvas.style.cursor = getResizeCursor(hitInfo.handleType);
+                } else if (hitInfo && typeof hitInfo.handleType === 'undefined') {
+                    renderer.canvas.style.cursor = 'move';
+                } else {
+                    renderer.canvas.style.cursor = 'default';
+                }
             }
         }
-         // If editing, keep cursor as 'text' or whatever the overlay has
+        // Handle cursor when editing text overlay is active
          else if (renderer.editingElement) {
-              const overlay = document.querySelector('.edit-overlay');
+             const overlay = document.querySelector('.edit-overlay');
+              // Let browser handle cursor if mouse is inside the textarea
               if (overlay && overlay.contains(event.target)) {
-                 // Let browser handle cursor within textarea
+                 // No action needed here
               } else {
-                 renderer.canvas.style.cursor = 'default'; // Or specific cursor outside overlay?
+                 // Set default cursor if mouse is outside overlay (and select tool active)
+                 if (renderer.currentTool === 'select'){
+                     renderer.canvas.style.cursor = 'default';
+                 }
               }
          }
     };
 }
+export function createMouseDownHandler(renderer) {
+    return function handleMouseDown(event) {
+        const rect = renderer.canvas.getBoundingClientRect();
+        const screenX = event.clientX - rect.left;
+        const screenY = event.clientY - rect.top;
+        const cartesianPoint = renderer.toCartesianCoords(screenX, screenY);
+        console.log(`MouseDown: current state = ${renderer.bezierDrawingState}`);
+
+        // --- Handle Pen Tool Click ---
+        if (renderer.currentTool === 'pen') {
+            if (renderer.bezierDrawingState === 'idle') {
+                // --- Start Segment: Define P0 (if needed), Start Dragging P1 ---
+                renderer.bezierDrawingState = 'definingP1';
+                // Use existing p0 if it exists (from previous segment end), else use click point
+                renderer.currentCurvePoints.p0 = renderer.currentCurvePoints.p0 || cartesianPoint;
+                // P1 always starts where the user clicks down for THIS drag
+                renderer.currentCurvePoints.p1 = cartesianPoint;
+                renderer.currentCurvePoints.p3 = null; // Clear p3
+                console.log("Started/Continued path: P0 set, defining P1...");
+                console.log("MouseDown: Set state to definingP1");
+                renderer.markEntireCanvasDirty();
+
+            } else if (renderer.bezierDrawingState === 'p1Defined') {
+                // --- Start Drag for P2: Define P3 ---
+                renderer.bezierDrawingState = 'definingP2';
+                renderer.currentCurvePoints.p3 = cartesianPoint; // This click is P3
+                renderer.currentMousePosCartesian = cartesianPoint; // P2 starts here for preview
+                console.log("Set end point P3, defining P2...");
+                console.log("MouseDown: Set state to definingP2");
+                renderer.markEntireCanvasDirty();
+            }
+            return; // Pen tool handles the click
+        }
+
+        // --- Handle Select/Edit Tool ---
+        // ... (Keep your existing select tool logic here) ...
+    };
+}
+
+// Helper function (place this at the top of eventHandlers.js or import it)
+function reflectPoint(pointToReflect, centerPoint) {
+    return {
+        x: centerPoint.x + (centerPoint.x - pointToReflect.x),
+        y: centerPoint.y + (centerPoint.y - pointToReflect.y)
+    };
+}
 
 export function createMouseUpHandler(renderer) {
+    // This function returns the actual event listener
     return function handleMouseUp(event) {
+        // Get mouse position relative to the canvas
+        const rect = renderer.canvas.getBoundingClientRect();
+        const screenX = event.clientX - rect.left;
+        const screenY = event.clientY - rect.top;
+        // Convert screen coordinates to Cartesian coordinates for the final position
+        const cartesianPoint = renderer.toCartesianCoords(screenX, screenY);
+
+        // Log the state *before* any changes in this handler
+        console.log(`MouseUp: current state = ${renderer.bezierDrawingState}`);
+
+        // --- Handle Pen Tool Release ---
+        if (renderer.currentTool === 'pen') {
+            // Check the drawing phase when the mouse is released
+            if (renderer.bezierDrawingState === 'definingP1') {
+                // --- Finalize Phase 1: Set P1 ---
+                console.log("MouseUp: State is definingP1 - Finalizing P1.");
+                renderer.currentCurvePoints.p1 = cartesianPoint; // Final P1
+                renderer.bezierDrawingState = 'p1Defined'; // State: P0, P1 known, wait for P3 click
+                console.log("MouseUp: Set state to p1Defined");
+                console.log("P1 defined. Click and drag for end point (P3) and its control (P2).");
+                renderer.markEntireCanvasDirty();
+
+            } else if (renderer.bezierDrawingState === 'definingP2') {
+                // --- Finalize Phase 2: Calculate Reflected P2, Create Curve, Setup Next ---
+                const p0 = renderer.currentCurvePoints.p0;
+                const p1 = renderer.currentCurvePoints.p1;
+                const p3 = renderer.currentCurvePoints.p3;
+                // Calculate the final P2 by reflecting the mouse release point (cartesianPoint)
+                const p2 = reflectPoint(cartesianPoint, p3); // Use helper function
+
+                // Add validation
+                if (!p0 || !p1 || !p2 || !p3) {
+                     console.error("MouseUp: Missing points before creating segment! Resetting.", { p0, p1, p2, p3 });
+                     renderer.bezierDrawingState = 'idle';
+                     renderer.currentCurvePoints = { p0: null, p1: null, p3: null };
+                     renderer.markEntireCanvasDirty();
+                     renderer.currentMousePosCartesian = null;
+                     return;
+                 }
+
+                console.log("Points (P2 reflected) before calling addBezierCurve:", { p0, p1, p2, p3 });
+                console.log("P2 defined (reflected). Creating curve segment.");
+                renderer.addBezierCurve(p0, p1, p2, p3); // Create the element
+
+                // --- SETUP FOR NEXT SMOOTH SEGMENT ---
+                // New P0 is the old P3
+                renderer.currentCurvePoints.p0 = p3;
+                // New P1 is the reflection of the finalized P2 around P3
+                renderer.currentCurvePoints.p1 = reflectPoint(p2, p3);
+                // Clear P3, ready for the next segment's end point definition
+                renderer.currentCurvePoints.p3 = null;
+                // Go back to 'p1Defined' state - P0 and the new (reflected) P1 are known
+                renderer.bezierDrawingState = 'p1Defined';
+                console.log("MouseUp: Set state to p1Defined (for next smooth segment)");
+                console.log("Segment added. New P0 and reflected P1 set. Click and drag for next P3/P2.");
+                // addBezierCurve already marks dirty
+            }
+            // Clear the temporary live mouse position tracker
+             renderer.currentMousePosCartesian = null;
+            return; // Pen tool handled the mouse up
+        }
+
+        // --- Handle Select/Edit Tool Release (Keep your existing working select logic here) ---
         let needsRedrawForDeselect = false;
-
-        // --- Finalize Resizing ---
-        if (renderer.resizing && renderer.selectedElement) {
-            console.log(`Finished resizing element ${renderer.selectedElement.id}`);
-            renderer.resizing = false;
-            // Reset temporary resize state
-            renderer.resizeHandleType = null;
-            renderer.originalDimensions = null;
-            renderer.startMousePos = null;
-            // Mark final state dirty (might be redundant, but safe)
-            markDirty(renderer, renderer.selectedElement);
-            // Set cursor based on final mouse position (hover check)
-            const rect = renderer.canvas.getBoundingClientRect();
-             const screenX = event.clientX - rect.left;
-             const screenY = event.clientY - rect.top;
-             const hitInfo = getElementAtScreenCoords(renderer, screenX, screenY);
-              if (hitInfo && hitInfo.handleType) renderer.canvas.style.cursor = getResizeCursor(hitInfo.handleType);
-             else if (hitInfo === renderer.selectedElement) renderer.canvas.style.cursor = 'move';
-             else renderer.canvas.style.cursor = 'default';
-        }
-        // --- Finalize Dragging ---
-        else if (renderer.dragging && renderer.selectedElement) {
-            console.log(`Finished dragging ${renderer.selectedElement.type} ID ${renderer.selectedElement.id}`);
-            renderer.dragging = false;
-            // Reset temporary drag state
-            renderer.dragOffsetX = 0;
-            renderer.dragOffsetY = 0;
-             // Mark final state dirty
-             markDirty(renderer, renderer.selectedElement);
-            // Set cursor to 'move' as the element is still selected
-            renderer.canvas.style.cursor = 'move';
-        }
-        // --- Handle Deselection on Click Up in Empty Space ---
+        let cursorShouldBeSet = true;
+        if (renderer.resizing && renderer.selectedElement) { /* ... select tool resize end logic ... */ cursorShouldBeSet = true; }
+        else if (renderer.dragging && renderer.selectedElement) { /* ... select tool drag end logic ... */ cursorShouldBeSet = true; }
         else if (!renderer.dragging && !renderer.resizing && !renderer.editingElement && renderer.selectedElement) {
-            // Check if the mouse up occurred over empty space
-             const rect = renderer.canvas.getBoundingClientRect();
-             const screenX = event.clientX - rect.left;
-             const screenY = event.clientY - rect.top;
-             const hitInfo = getElementAtScreenCoords(renderer, screenX, screenY);
-             if (!hitInfo) { // Only deselect if click up is on nothing
-                 console.log("Mouse up on empty space after click - deselecting");
-                 markDirty(renderer, renderer.selectedElement); // Mark old selection for redraw
-                 renderer.selectedElement = null;
-                 needsRedrawForDeselect = true; // Need redraw to remove selection viz
+             const hitInfoUp = getElementAtScreenCoords(renderer, screenX, screenY);
+             if (!hitInfoUp) { /* ... select tool deselect logic ... */ cursorShouldBeSet = false;}
+             else { cursorShouldBeSet = true; }
+        }
+        else if (!renderer.dragging && !renderer.resizing) { cursorShouldBeSet = true; }
+        if (renderer.currentTool === 'select' && cursorShouldBeSet) { /* ... select tool final cursor setting ... */ }
+        if (needsRedrawForDeselect) { markEntireCanvasDirty(renderer); }
+    };
+}
+
+export function createDoubleClickHandler(renderer) {
+    return function handleDoubleClick(event) {
+         // Prevent double-click from triggering drag start
+         renderer.dragging = false;
+         // REMOVE THIS LINE: renderer.canvas.style.cursor = 'default';
+
+        const overlay = document.querySelector('.edit-overlay');
+        const isClickOnOverlay = overlay && event.target === overlay;
+
+        if (isClickOnOverlay) return; // Do nothing if double-clicking overlay
+
+        // Stop existing edit if double-clicking elsewhere
+        if (renderer.editingElement && !isClickOnOverlay) {
+            stopEditing(renderer);
+            // After stopping edit, we might want the default cursor IF select tool active
+            if(renderer.currentTool === 'select') {
                  renderer.canvas.style.cursor = 'default';
-             }
+            }
+            // Don't proceed to element check if we just stopped editing
+            return;
         }
 
+        // --- Only check elements/handles if NOT editing ---
 
-        // If deselection happened, request a redraw
-        if (needsRedrawForDeselect) {
-            markEntireCanvasDirty(renderer); // Use full redraw for simplicity on deselect
-        }
+        const rect = renderer.canvas.getBoundingClientRect();
+        const screenX = event.clientX - rect.left;
+        const screenY = event.clientY - rect.top;
+        const element = getElementAtScreenCoords(renderer, screenX, screenY);
+
+         // Start editing text element (only relevant if select tool is active conceptually)
+         if (renderer.currentTool === 'select' && element && typeof element.handleType === 'undefined' && element.type === "text") {
+            startEditing(renderer, element);
+         }
+         // If not starting text edit, set cursor based on hover ONLY if select tool active
+         else if (renderer.currentTool === 'select') { // << WRAP LOGIC >>
+              const handleInfo = getHandleAtScreenCoords(renderer, screenX, screenY, renderer.selectedElement);
+              if (handleInfo) {
+                 renderer.canvas.style.cursor = getResizeCursor(handleInfo.type); // Cursor over handle
+              } else if (element && typeof element.handleType === 'undefined') {
+                 renderer.canvas.style.cursor = 'move'; // Cursor over element
+              } else {
+                 renderer.canvas.style.cursor = 'default'; // Cursor over empty space
+              }
+         }
+         // If currentTool is 'pen', do nothing here. Cursor remains 'crosshair'.
     };
 }
 
@@ -238,49 +290,6 @@ export function createMouseLeaveHandler(renderer) {
             renderer.canvas.style.cursor = 'default';
          }
      };
-}
-
-export function createDoubleClickHandler(renderer) {
-    return function handleDoubleClick(event) {
-         // Prevent double-click from triggering drag start
-         renderer.dragging = false;
-         renderer.canvas.style.cursor = 'default'; // Reset cursor initially
-
-
-        const overlay = document.querySelector('.edit-overlay');
-        const isClickOnOverlay = overlay && event.target === overlay;
-
-        // Do nothing if double-clicking inside the text editor overlay
-        if (isClickOnOverlay) return;
-
-        // Stop existing edit if double-clicking elsewhere
-        if (renderer.editingElement && !isClickOnOverlay) {
-            stopEditing(renderer);
-        }
-
-        const rect = renderer.canvas.getBoundingClientRect();
-        const screenX = event.clientX - rect.left;
-        const screenY = event.clientY - rect.top;
-
-        // Check what was double-clicked (ignoring handles)
-        const element = getElementAtScreenCoords(renderer, screenX, screenY);
-
-         // Start editing if double-clicking a text element (and not a handle)
-         if (element && typeof element.handleType === 'undefined' && element.type === "text") {
-            startEditing(renderer, element); // Pass the renderer instance and element
-         }
-          // If double-clicking something else or empty space, ensure cursor is appropriate
-         else {
-              const handleInfo = getHandleAtScreenCoords(renderer, screenX, screenY, renderer.selectedElement);
-              if (handleInfo) {
-                 renderer.canvas.style.cursor = getResizeCursor(handleInfo.type); // Cursor over handle
-              } else if (element && typeof element.handleType === 'undefined') {
-                 renderer.canvas.style.cursor = 'move'; // Cursor over element
-              } else {
-                 renderer.canvas.style.cursor = 'default'; // Cursor over empty space
-              }
-         }
-    };
 }
 
 export function createResizeHandler(renderer) {
